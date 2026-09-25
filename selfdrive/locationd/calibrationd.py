@@ -40,9 +40,10 @@ HEIGHT_INIT = np.array([1.22])
 # These values are needed to accommodate the model frame in the narrow cam
 if HARDWARE.get_device_type() == 'mici':
   PITCH_LIMITS = np.array([-0.143101, 0.22235988])
+  YAW_LIMITS = np.radians([-5.0, 5.0])
 else:
   PITCH_LIMITS = np.array([-0.09074112085129739, 0.17])
-YAW_LIMITS = np.array([-0.06912048084718224, 0.06912048084718235])
+  YAW_LIMITS = np.array([-0.06912048084718224, 0.06912048084718235])
 DEBUG = os.getenv("DEBUG") is not None
 
 
