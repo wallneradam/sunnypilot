@@ -43,6 +43,10 @@ def speed_limit_pre_active_alert(CP: car.CarParams, CS: car.CarState, sm: messag
   set_speed = sm['controlsState'].deprecated.vCruise if v_cruise_cluster == 0.0 else v_cruise_cluster
   set_speed_conv = round(set_speed if metric else set_speed * CV.KPH_TO_MPH)
 
+  if not sm['longitudinalPlanSP'].speedLimit.resolver.speedLimitValid:
+    return Alert("", "", AlertStatus.normal, AlertSize.none,
+                 Priority.LOW, VisualAlert.none, AudibleAlert.none, .1)
+
   speed_limit_final_last = sm['longitudinalPlanSP'].speedLimit.resolver.speedLimitFinalLast
   speed_limit_final_last_conv = round(speed_limit_final_last * speed_conv)
   alert_1_str = ""
@@ -59,9 +63,9 @@ def speed_limit_pre_active_alert(CP: car.CarParams, CS: car.CarState, sm: messag
   else:
     if IS_MICI:
       if set_speed_conv < speed_limit_final_last_conv:
-        alert_1_str = "Press + to confirm speed limit"
+        alert_1_str = f"{speed_limit_final_last_conv} {'km/h' if metric else 'mph'} · Press + to confirm"
       elif set_speed_conv > speed_limit_final_last_conv:
-        alert_1_str = "Press - to confirm speed limit"
+        alert_1_str = f"{speed_limit_final_last_conv} {'km/h' if metric else 'mph'} · Press - to confirm"
     else:
       alert_size = AlertSize.none
 

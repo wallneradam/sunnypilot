@@ -140,11 +140,11 @@ class TestSpeedLimitAssist:
     assert self.sla.state == SpeedLimitAssistState.preActive
     assert self.sla.is_enabled and not self.sla.is_active
 
-  def test_transition_disabled_to_pending_no_speed_limit_not_max_initial_set_speed(self):
+  def test_stays_disabled_without_speed_limit(self):
     for _ in range(int(3. / DT_MDL)):
       self.sla.update(True, False, SPEED_LIMITS['highway'], 0, SPEED_LIMITS['city'], 0, 0, False, 0, self.events_sp)
-    assert self.sla.state == SpeedLimitAssistState.pending
-    assert self.sla.is_enabled and not self.sla.is_active
+    assert self.sla.state == SpeedLimitAssistState.disabled
+    assert not self.sla.is_enabled and not self.sla.is_active
 
   def test_preactive_to_active_with_max_speed_confirmation(self):
     self.sla.state = SpeedLimitAssistState.preActive
@@ -162,11 +162,11 @@ class TestSpeedLimitAssist:
       self.sla.update(True, False, SPEED_LIMITS['city'], 0, SPEED_LIMITS['highway'], SPEED_LIMITS['city'], SPEED_LIMITS['city'], True, 0, self.events_sp)
     assert self.sla.state == SpeedLimitAssistState.inactive
 
-  def test_preactive_to_pending_no_speed_limit(self):
+  def test_preactive_to_disabled_no_speed_limit(self):
     self.sla.state = SpeedLimitAssistState.preActive
     self.sla.update(True, False, SPEED_LIMITS['highway'], 0, self.pcm_long_max_set_speed, 0, 0, False, 0, self.events_sp)
-    assert self.sla.state == SpeedLimitAssistState.pending
-    assert self.sla.is_enabled and not self.sla.is_active
+    assert self.sla.state == SpeedLimitAssistState.disabled
+    assert not self.sla.is_enabled and not self.sla.is_active
 
   def test_pending_to_active_when_speed_limit_available(self):
     self.sla.state = SpeedLimitAssistState.pending
@@ -236,8 +236,8 @@ class TestSpeedLimitAssist:
     old_speed_limit = SPEED_LIMITS['city']
 
     self.sla.update(True, False, SPEED_LIMITS['city'], 0, self.pcm_long_max_set_speed, 0, old_speed_limit, True, 0, self.events_sp)
-    assert self.sla.state in ACTIVE_STATES
-    assert self.sla.output_v_target == old_speed_limit
+    assert self.sla.state == SpeedLimitAssistState.disabled
+    assert self.sla.output_v_target == V_CRUISE_UNSET
 
   def test_distance_based_adapting(self):
     self.sla.state = SpeedLimitAssistState.adapting

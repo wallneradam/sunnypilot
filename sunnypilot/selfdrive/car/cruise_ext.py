@@ -109,7 +109,7 @@ class VCruiseHelperSP:
 
   def update_speed_limit_assist(self, is_metric, LP_SP: custom.LongitudinalPlanSP) -> None:
     resolver = LP_SP.speedLimit.resolver
-    self.has_speed_limit = resolver.speedLimitValid or resolver.speedLimitLastValid
+    self.has_speed_limit = resolver.speedLimitValid
     self.speed_limit_final_last = LP_SP.speedLimit.resolver.speedLimitFinalLast
     self.speed_limit_final_last_kph = self.speed_limit_final_last * CV.MS_TO_KPH
     self.sla_state = LP_SP.speedLimit.assist.state
@@ -121,6 +121,8 @@ class VCruiseHelperSP:
     return self.has_speed_limit and bool(self.speed_limit_final_last_kph != self.prev_speed_limit_final_last_kph)
 
   def update_speed_limit_assist_pre_active_confirmed(self, button_type: car.CarState.ButtonEvent.Type) -> bool:
+    if not self.has_speed_limit:
+      return False
     if self.sla_state == SpeedLimitAssistState.preActive or self.prev_sla_state == SpeedLimitAssistState.preActive:
       if button_type == ButtonType.decelCruise and self.req_minus:
         return True
@@ -130,7 +132,7 @@ class VCruiseHelperSP:
     return False
 
   def update_speed_limit_assist_v_cruise_non_pcm(self) -> None:
-    if self.sla_state in SLA_ACTIVE_STATES and (self.prev_sla_state not in SLA_ACTIVE_STATES or
+    if self.has_speed_limit and self.sla_state in SLA_ACTIVE_STATES and (self.prev_sla_state not in SLA_ACTIVE_STATES or
                                                 self.update_speed_limit_final_last_changed):
       self.v_cruise_kph = np.clip(round(self.speed_limit_final_last_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
 

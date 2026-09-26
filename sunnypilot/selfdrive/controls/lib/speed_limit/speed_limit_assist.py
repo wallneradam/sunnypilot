@@ -384,7 +384,7 @@ class SpeedLimitAssist:
     self.v_ego = v_ego
     self.a_ego = a_ego
 
-    self._has_speed_limit = has_speed_limit
+    self._has_speed_limit = has_speed_limit and speed_limit > 0.
     self._speed_limit = speed_limit
     self._speed_limit_final_last = speed_limit_final_last
     self._distance = distance
@@ -393,7 +393,11 @@ class SpeedLimitAssist:
     self.update_calculations(v_cruise_cluster)
 
     self._state_prev = self.state
-    if self.pcm_op_long:
+    if not self._has_speed_limit:
+      self.state = SpeedLimitAssistState.disabled
+      self.is_enabled = self.is_active = False
+      self._plus_hold = self._minus_hold = 0.
+    elif self.pcm_op_long:
       self.is_enabled, self.is_active = self.update_state_machine_pcm_op_long()
     else:
       self.is_enabled, self.is_active = self.update_state_machine_non_pcm_long()
