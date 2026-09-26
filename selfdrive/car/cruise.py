@@ -3,6 +3,8 @@ import numpy as np
 
 from cereal import car
 from openpilot.common.constants import CV
+from openpilot.common.realtime import DT_CTRL
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.mode_selector import SpeedLimitModeSelector
 from openpilot.sunnypilot.selfdrive.car.cruise_ext import VCruiseHelperSP
 
 
@@ -37,6 +39,7 @@ class VCruiseHelper(VCruiseHelperSP):
     self.v_cruise_cluster_kph = V_CRUISE_UNSET
     self.v_cruise_kph_last = 0
     self.button_timers = {ButtonType.decelCruise: 0, ButtonType.accelCruise: 0}
+    self.speed_limit_mode_buttons = CP.brand == 'hyundai' and not CP_SP.pcmCruiseSpeed
     self.button_change_states = {btn: {"standstill": False, "enabled": False} for btn in self.button_timers}
 
   @property
@@ -85,11 +88,15 @@ class VCruiseHelper(VCruiseHelperSP):
 
     for b in CS.buttonEvents:
       if b.type.raw in self.button_timers and not b.pressed:
-        if self.button_timers[b.type.raw] > CRUISE_LONG_PRESS:
+        long_release = (self.button_timers[b.type.raw] * DT_CTRL >= SpeedLimitModeSelector.HOLD_SECONDS
+                        if self.speed_limit_mode_buttons else self.button_timers[b.type.raw] > CRUISE_LONG_PRESS)
+        if long_release:
           return  # end long press
         button_type = b.type.raw
         break
     else:
+      if self.speed_limit_mode_buttons:
+        return
       for k, timer in self.button_timers.items():
         if timer and timer % CRUISE_LONG_PRESS == 0:
           button_type = k

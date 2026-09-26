@@ -38,7 +38,7 @@ def set_speed_limit_assist_availability(CP: car.CarParams, CP_SP: custom.CarPara
     allowed = False
 
   if not allowed:
-    if params.get("SpeedLimitMode", return_default=True) == SpeedLimitMode.assist:
+    if params.get("SpeedLimitMode", return_default=True) in (SpeedLimitMode.assist, SpeedLimitMode.auto):
       params.put("SpeedLimitMode", int(SpeedLimitMode.warning), block=True)
 
   return allowed

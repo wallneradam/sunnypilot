@@ -31,6 +31,7 @@ from openpilot.sunnypilot.selfdrive.car.cruise_helpers import CruiseHelper
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.controller import IntelligentCruiseButtonManagement
 from openpilot.sunnypilot.selfdrive.selfdrived.button_state_tracker import ButtonStateTracker
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.mode_selector import SpeedLimitModeSelector
 
 REPLAY = "REPLAY" in os.environ
 SIMULATION = "SIMULATION" in os.environ
@@ -175,6 +176,8 @@ class SelfdriveD(CruiseHelper):
     self.icbm = IntelligentCruiseButtonManagement(self.CP, self.CP_SP)
 
     self.button_state_tracker = ButtonStateTracker()
+    self.speed_limit_mode_selector = SpeedLimitModeSelector(self.params) if self.CP.brand == 'hyundai' and not self.CP_SP.pcmCruiseSpeed else None
+    self.speed_limit_mode_alert = None
     self.car_events_sp = CarSpecificEventsSP(self.CP, self.CP_SP)
 
     CruiseHelper.__init__(self, self.CP)
@@ -545,6 +548,9 @@ class SelfdriveD(CruiseHelper):
 
     alerts = self.events.create_alerts(self.state_machine.current_alert_types, callback_args)
     alerts_sp = self.events_sp.create_alerts(self.state_machine.current_alert_types, callback_args)
+    if self.speed_limit_mode_alert is not None:
+      alerts_sp.append(self.speed_limit_mode_alert)
+      self.speed_limit_mode_alert = None
 
     self.AM.add_many(self.sm.frame, alerts + alerts_sp)
     self.AM.process_alerts(self.sm.frame, clear_event_types)
@@ -608,6 +614,8 @@ class SelfdriveD(CruiseHelper):
 
   def step(self):
     CS = self.data_sample()
+    if self.speed_limit_mode_selector is not None:
+      self.speed_limit_mode_alert = self.speed_limit_mode_selector.update(CS)
     self.update_events(CS)
     if not self.CP.passive and self.initialized:
       self.enabled, self.active = self.state_machine.update(self.events)
@@ -615,7 +623,8 @@ class SelfdriveD(CruiseHelper):
       self.mads.update(CS)
     self.update_alerts(CS)
 
-    self.button_state_tracker.update(CS)
+    suppressed_releases = self.speed_limit_mode_selector.suppressed_releases if self.speed_limit_mode_selector is not None else ()
+    self.button_state_tracker.update(CS, suppressed_releases)
     self.publish_selfdriveState(CS)
 
     self.CS_prev = CS

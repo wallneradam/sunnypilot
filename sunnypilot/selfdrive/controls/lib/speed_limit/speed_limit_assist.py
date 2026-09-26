@@ -10,6 +10,7 @@ from cereal import custom, car
 from openpilot.common.params import Params
 from openpilot.common.constants import CV
 from openpilot.common.realtime import DT_MDL
+from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD
@@ -61,7 +62,10 @@ class SpeedLimitAssist:
     self.pre_active_timer = 0
     self.is_metric = self.params.get_bool("IsMetric")
     set_speed_limit_assist_availability(self.CP, self.CP_SP, self.params)
-    self.enabled = self.params.get("SpeedLimitMode", return_default=True) == Mode.assist
+    self.mode = self.params.get("SpeedLimitMode", return_default=True)
+    self.enabled = self.mode in (Mode.assist, Mode.auto)
+    self.auto_override = False
+    self.auto_limit = 0
     self.long_enabled = False
     self.long_enabled_prev = False
     self.is_enabled = False
@@ -143,7 +147,44 @@ class SpeedLimitAssist:
     if self.frame % int(PARAMS_UPDATE_PERIOD / DT_MDL) == 0:
       self.is_metric = self.params.get_bool("IsMetric")
       set_speed_limit_assist_availability(self.CP, self.CP_SP, self.params)
-      self.enabled = self.params.get("SpeedLimitMode", return_default=True) == Mode.assist
+    mode = self.params.get("SpeedLimitMode", return_default=True)
+    if mode != self.mode:
+      self.state = SpeedLimitAssistState.disabled
+      self.auto_override = False
+      self.auto_limit = 0
+      self._plus_hold = self._minus_hold = 0.
+      self.long_engaged_timer = int(DISABLED_GUARD_PERIOD / DT_MDL)
+    self.mode = mode
+    self.enabled = self.mode in (Mode.assist, Mode.auto)
+
+  def update_state_machine_auto(self):
+    if not self.long_enabled:
+      self.state = SpeedLimitAssistState.disabled
+      self.auto_override = False
+      self.long_engaged_timer = int(DISABLED_GUARD_PERIOD / DT_MDL)
+      return False, False
+
+    if not self.long_enabled_prev:
+      self.long_engaged_timer = int(DISABLED_GUARD_PERIOD / DT_MDL)
+      self.auto_override = False
+
+    limit_changed = self.speed_limit_final_last_conv != self.auto_limit
+    if limit_changed:
+      self.auto_override = False
+    elif self.state == SpeedLimitAssistState.active and self.v_cruise_cluster_changed and not self.target_set_speed_confirmed:
+      self.auto_override = True
+      cloudlog.event('speed_limit_auto_override', set_speed=self.v_cruise_cluster_conv, target=self.speed_limit_final_last_conv)
+    self.auto_limit = self.speed_limit_final_last_conv
+
+    self.long_engaged_timer = max(0, self.long_engaged_timer - 1)
+    if self.long_engaged_timer > 0:
+      self.state = SpeedLimitAssistState.disabled
+    elif self.auto_override:
+      self.state = SpeedLimitAssistState.inactive
+    else:
+      self.state = SpeedLimitAssistState.active
+    active = self.state == SpeedLimitAssistState.active
+    return active, active
 
   def update_buttons(self, release_toggle: int) -> None:
     released = self._release_toggle_prev ^ release_toggle
@@ -397,6 +438,8 @@ class SpeedLimitAssist:
       self.state = SpeedLimitAssistState.disabled
       self.is_enabled = self.is_active = False
       self._plus_hold = self._minus_hold = 0.
+    elif self.mode == Mode.auto and not self.pcm_op_long:
+      self.is_enabled, self.is_active = self.update_state_machine_auto()
     elif self.pcm_op_long:
       self.is_enabled, self.is_active = self.update_state_machine_pcm_op_long()
     else:

@@ -12,14 +12,15 @@ class ButtonStateTracker:
     self.pressed: int = 0
     self.release_toggle: int = 0
 
-  def update(self, CS: car.CarState) -> None:
+  def update(self, CS: car.CarState, suppressed_releases=()) -> None:
     for b in CS.buttonEvents:
       bit = 1 << b.type.raw
       if b.pressed:
         self.pressed |= bit
       else:
         self.pressed &= ~bit
-        self.release_toggle ^= bit
+        if b.type not in suppressed_releases:
+          self.release_toggle ^= bit
 
   def publish(self, ss_sp) -> None:
     ss_sp.buttonsPressed = self.pressed
