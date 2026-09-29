@@ -15,6 +15,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD, get_sanitize_int_param
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import LIMIT_MAX_MAP_DATA_AGE, LIMIT_ADAPT_ACC
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Policy, OffsetType
+from openpilot.sunnypilot.selfdrive.car.ioniq_speed_preview import select_preview, PreviewReleaseGuard, load_acceleration_advance
 
 SpeedLimitSource = custom.LongitudinalPlanSP.SpeedLimit.Source
 
@@ -73,6 +74,8 @@ class SpeedLimitResolver:
     self.speed_limit_final = 0.
     self.speed_limit_final_last = 0.
     self.speed_limit_offset = 0.
+    self.preview_release_guard = PreviewReleaseGuard()
+    self.acceleration_advance_m = load_acceleration_advance()
 
   def update_speed_limit_states(self) -> None:
     self.speed_limit_final = self.speed_limit + self.speed_limit_offset
@@ -91,6 +94,7 @@ class SpeedLimitResolver:
 
   def update_params(self):
     if self.frame % int(PARAMS_UPDATE_PERIOD / DT_MDL) == 0:
+      self.acceleration_advance_m = load_acceleration_advance()
       self.policy = self.params.get("SpeedLimitPolicy", return_default=True)
       self.is_metric = self.params.get_bool("IsMetric")
       self.offset_type = self.params.get("SpeedLimitOffsetType", return_default=True)
@@ -112,8 +116,18 @@ class SpeedLimitResolver:
 
   def _get_from_car_state(self, sm: messaging.SubMaster) -> None:
     self._reset_limit_sources(SpeedLimitSource.car)
-    self.limit_solutions[SpeedLimitSource.car] = sm['carStateSP'].speedLimit
-    self.distance_solutions[SpeedLimitSource.car] = 0.
+    state = sm['carStateSP']
+    limit, distance = select_preview(
+      state.speedLimit,
+      getattr(state, 'speedLimitAhead', 0.),
+      getattr(state, 'speedLimitAheadDistance', 0.),
+      self.v_ego,
+      ahead_valid=getattr(state, 'speedLimitAheadValid', False),
+      age_s=getattr(state, 'speedLimitAheadAge', None),
+      acceleration_advance_m=self.acceleration_advance_m,
+    )
+    self.limit_solutions[SpeedLimitSource.car] = limit
+    self.distance_solutions[SpeedLimitSource.car] = distance
 
   def _get_from_map_data(self, sm: messaging.SubMaster) -> None:
     self._reset_limit_sources(SpeedLimitSource.map)
@@ -183,6 +197,12 @@ class SpeedLimitResolver:
     self.update_params()
 
     self.speed_limit, self.distance, self.source = self._resolve_limit_sources(sm)
+    if not self.preview_release_guard.allow(
+      sm['carStateSP'].speedLimit, self.speed_limit,
+      car_source=self.source == SpeedLimitSource.car,
+      policy=self.policy, engaged=sm['carControl'].enabled,
+    ):
+      self.speed_limit, self.distance, self.source = 0., 0., SpeedLimitSource.none
     self.speed_limit_offset = self._get_speed_limit_offset()
 
     self.update_speed_limit_states()

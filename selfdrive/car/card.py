@@ -23,6 +23,7 @@ from openpilot.selfdrive.car.helpers import convert_carControlSP, convert_to_cap
 
 from openpilot.sunnypilot.mads.helpers import set_alternative_experience, set_car_specific_params
 from openpilot.sunnypilot.selfdrive.car import interfaces as sunnypilot_interfaces
+from openpilot.sunnypilot.selfdrive.car.ioniq_speed_limit import IoniqSpeedLimitClient
 
 REPLAY = "REPLAY" in os.environ
 
@@ -121,6 +122,8 @@ class Car:
       self.CI, self.CP, self.CP_SP = CI, CI.CP, CI.CP_SP
       self.RI = RI
 
+    self.ioniq_speed_limit = IoniqSpeedLimitClient() if self.CP.carFingerprint == "HYUNDAI_IONIQ_EV_LTD" and not REPLAY else None
+
     self.CP.alternativeExperience = 0
     # mads
     set_alternative_experience(self.CP, self.CP_SP, self.params)
@@ -197,6 +200,8 @@ class Car:
     # Update carState from CAN
     CS, CS_SP = self.CI.update(can_list)
     CS_SP = convert_to_capnp(CS_SP)
+    if self.ioniq_speed_limit is not None:
+      self.ioniq_speed_limit.apply_state(CS_SP)
 
     # Update radar tracks from CAN
     RD: structs.RadarDataT | None = self.RI.update(can_list)

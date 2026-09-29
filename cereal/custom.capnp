@@ -437,6 +437,10 @@ struct BackupManagerSP @0xf98d843bfd7004a3 {
 
 struct CarStateSP @0xb86e6369214c01c8 {
   speedLimit @0 :Float32;
+  speedLimitAhead @1 :Float32;
+  speedLimitAheadDistance @2 :Float32;
+  speedLimitAheadValid @3 :Bool;
+  speedLimitAheadAge @4 :Float32;
 }
 
 struct LiveMapDataSP @0xf416ec09499d9d19 {
