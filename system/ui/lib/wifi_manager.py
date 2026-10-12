@@ -510,14 +510,22 @@ class WifiManager:
       time.sleep(1)
 
   def _get_adapter(self, adapter_type: int) -> str | None:
-    # Return the first NetworkManager device path matching adapter_type
+    # Prefer the client interface when a separate hotspot interface exists.
+    fallback = None
     try:
       device_paths = self._router_main.send_and_get_reply(new_method_call(self._nm, 'GetDevices')).body[0]
       for device_path in device_paths:
         dev_addr = DBusAddress(device_path, bus_name=NM, interface=NM_DEVICE_IFACE)
         dev_type = self._router_main.send_and_get_reply(Properties(dev_addr).get('DeviceType')).body[0][1]
         if dev_type == adapter_type:
-          return str(device_path)
+          if adapter_type != NM_DEVICE_TYPE_WIFI:
+            return str(device_path)
+          if fallback is None:
+            fallback = str(device_path)
+          interface = self._router_main.send_and_get_reply(Properties(dev_addr).get('Interface')).body[0][1]
+          if interface == 'wlan0':
+            return str(device_path)
+      return fallback
     except Exception as e:
       cloudlog.exception(f"Error getting adapter type {adapter_type}: {e}")
     return None
@@ -559,7 +567,7 @@ class WifiManager:
     return router.send_and_get_reply(Properties(self._nm).get('ActiveConnections')).body[0][1]
 
   def _get_active_wifi_connection(self, router: DBusConnection | DBusRouter | None = None) -> tuple[str | None, dict | None]:
-    # Returns first Connection settings path and ActiveConnection props from ActiveConnections with Type 802-11-wireless
+    # Match the selected client device, excluding connections on the hotspot device.
     if router is None:
       router = self._router_main
 
@@ -574,7 +582,9 @@ class WifiManager:
       props = reply.body[0]
 
       conn_path = props.get('Connection', ('o', '/'))[1]
-      if props.get('Type', ('s', ''))[1] == '802-11-wireless' and conn_path != '/':
+      devices = props.get('Devices', ('ao', []))[1]
+      if (props.get('Type', ('s', ''))[1] == '802-11-wireless' and conn_path != '/'
+          and self._wifi_device is not None and self._wifi_device in devices):
         return conn_path, props
 
     return None, None
