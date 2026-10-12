@@ -23,6 +23,7 @@ from openpilot.system.hardware.hw import Paths
 from openpilot.system.hardware import PC
 
 from openpilot.sunnypilot.system.params_migration import run_migration
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode as SpeedLimitMode
 
 
 def manager_init() -> None:
@@ -35,6 +36,7 @@ def manager_init() -> None:
   params.clear_all(ParamKeyFlag.CLEAR_ON_ONROAD_TRANSITION)
   params.clear_all(ParamKeyFlag.CLEAR_ON_OFFROAD_TRANSITION)
   params.clear_all(ParamKeyFlag.CLEAR_ON_IGNITION_ON)
+  params.put("SpeedLimitMode", int(SpeedLimitMode.off), block=True)
   # if build_metadata.release_channel:
   #   params.clear_all(ParamKeyFlag.DEVELOPMENT_ONLY)
 
