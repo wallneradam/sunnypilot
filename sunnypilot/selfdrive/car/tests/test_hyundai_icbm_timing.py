@@ -21,14 +21,31 @@ def interface(car=CAR.HYUNDAI_IONIQ_EV_LTD):
   return IntelligentCruiseButtonManagementInterface(cp, SimpleNamespace())
 
 
+def car_state(metric=True):
+  state = structs.CarState()
+  state.canValid = True
+  state.canTimeout = False
+  state.cruiseState.enabled = True
+  state.cruiseState.speedCluster = 50 / 3.6
+  return SimpleNamespace(is_metric=metric, clu11=defaultdict(int), out=state)
+
+
 def scheduled_messages(ctrl, command, metric=True, frames=120):
-  cs = SimpleNamespace(is_metric=metric, clu11=defaultdict(int))
+  cs = car_state(metric)
+  acknowledge = None
+  last_sent = None
   cc = SimpleNamespace(intelligentCruiseButtonManagement=SimpleNamespace(sendButton=command))
   packer = CANPacker(DBC[ctrl.CP.carFingerprint][Bus.pt])
   sends = {}
   for frame in range(1, frames + 1):
+    if frame == acknowledge:
+      cs.out.cruiseState.speedCluster += (1 if command == SendButtonState.increase else -1) / 3.6
+      acknowledge = None
     messages = ctrl.update(cs, cc, packer, frame, ctrl.last_button_frame, None)
     if messages:
+      if last_sent is None or frame - last_sent > 1:
+        acknowledge = frame + 9
+      last_sent = frame
       sends[frame] = messages
   return sends, cs, packer
 
@@ -114,3 +131,128 @@ def test_driver_button_press_stops_automatic_requests(button):
   cruise = SimpleNamespace(override=False, cancel=False, resume=False)
   ctrl.run(cs, SimpleNamespace(enabled=True, cruiseControl=cruise), SimpleNamespace(vTarget=70 / 3.6), True)
   assert ctrl.cruise_button == ControllerSendButtonState.none
+
+
+def simulate_feedback(command=SendButtonState.increase, delays=(9,), missed=(), frames=180):
+  ctrl = interface()
+  cs = car_state()
+  cc = SimpleNamespace(intelligentCruiseButtonManagement=SimpleNamespace(sendButton=command))
+  packer = CANPacker(DBC[CAR.HYUNDAI_IONIQ_EV_LTD][Bus.pt])
+  starts, acknowledgements, sent = [], [], []
+  pending = []
+  last_sent = None
+  for frame in range(1, frames + 1):
+    for due in pending.copy():
+      if due == frame:
+        cs.out.cruiseState.speedCluster += (1 if command == SendButtonState.increase else -1) / 3.6
+        acknowledgements.append(frame)
+        pending.remove(due)
+    messages = ctrl.update(cs, cc, packer, frame, ctrl.last_button_frame, None)
+    if messages:
+      if last_sent is None or frame - last_sent > 1:
+        starts.append(frame)
+        attempt = len(starts) - 1
+        if attempt not in missed:
+          pending.append(frame + delays[attempt % len(delays)])
+      last_sent = frame
+      sent.append(frame)
+  return starts, acknowledgements, sent
+
+
+@pytest.mark.parametrize('command', [SendButtonState.increase, SendButtonState.decrease])
+def test_accepted_steps_keep_the_120_ms_pace(command):
+  starts, responses, _ = simulate_feedback(command)
+  assert len(responses) >= 10
+  assert all(b - a == 12 for a, b in zip(starts, starts[1:], strict=False))
+  assert all(b - a == 12 for a, b in zip(responses, responses[1:], strict=False))
+
+
+@pytest.mark.parametrize('command', [SendButtonState.increase, SendButtonState.decrease])
+def test_missed_step_is_retried_sooner_without_a_catchup_burst(command):
+  starts, responses, _ = simulate_feedback(command, missed=(2,))
+  assert starts[3] - starts[2] == 11
+  intervals = [b - a for a, b in zip(responses, responses[1:], strict=False)]
+  assert max(intervals) == 23
+  assert min(intervals) == 12
+  assert all(delta == 12 for delta in intervals[2:])
+
+
+@pytest.mark.parametrize('delays', [(7, 11), (11, 7), (7, 9, 11)])
+def test_feedback_pacing_reduces_response_interval_variation(delays):
+  _, responses, _ = simulate_feedback(delays=delays, frames=240)
+  intervals = [b - a for a, b in zip(responses, responses[1:], strict=False)]
+  fixed_intervals = [12 + delays[n % len(delays)] - delays[(n - 1) % len(delays)] for n in range(1, 20)]
+  assert max(intervals) - min(intervals) < max(fixed_intervals) - min(fixed_intervals)
+  assert all(10 <= delta <= 14 for delta in intervals)
+
+
+def test_early_feedback_ends_the_press_and_does_not_exceed_ten_hz():
+  starts, _, sent = simulate_feedback(delays=(2,))
+  assert sent[:2] == [8, 9]
+  assert 10 not in sent
+  assert all(b - a >= 10 for a, b in zip(starts, starts[1:], strict=False))
+
+
+def test_a_request_after_long_idle_sends_a_complete_short_press():
+  ctrl = interface()
+  cs = car_state()
+  cc = SimpleNamespace(intelligentCruiseButtonManagement=SimpleNamespace(sendButton=SendButtonState.increase))
+  packer = CANPacker(DBC[CAR.HYUNDAI_IONIQ_EV_LTD][Bus.pt])
+  sent = [frame for frame in range(1000, 1006) if ctrl.update(cs, cc, packer, frame, ctrl.last_button_frame, None)]
+  assert sent == [1000, 1001, 1002, 1003, 1004]
+
+
+@pytest.mark.parametrize('invalid', ['canValid', 'canTimeout', 'cruiseDisabled', 'nan', 'negative', 'manualButton'])
+def test_bad_feedback_or_driver_button_suppresses_requests(invalid):
+  ctrl = interface()
+  cs = car_state()
+  if invalid == 'canValid':
+    cs.out.canValid = False
+  elif invalid == 'canTimeout':
+    cs.out.canTimeout = True
+  elif invalid == 'cruiseDisabled':
+    cs.out.cruiseState.enabled = False
+  elif invalid == 'nan':
+    cs.out.cruiseState.speedCluster = float('nan')
+  elif invalid == 'negative':
+    cs.out.cruiseState.speedCluster = -1
+  else:
+    cs.out.buttonEvents = [structs.CarState.ButtonEvent(type=structs.CarState.ButtonEvent.Type.accelCruise, pressed=True)]
+  cc = SimpleNamespace(intelligentCruiseButtonManagement=SimpleNamespace(sendButton=SendButtonState.increase))
+  packer = CANPacker(DBC[CAR.HYUNDAI_IONIQ_EV_LTD][Bus.pt])
+  assert not ctrl.update(cs, cc, packer, 1000, 0, None)
+
+
+def test_cancelling_mid_press_clears_pending_requests():
+  ctrl = interface()
+  cs = car_state()
+  cc = SimpleNamespace(intelligentCruiseButtonManagement=SimpleNamespace(sendButton=SendButtonState.increase))
+  packer = CANPacker(DBC[CAR.HYUNDAI_IONIQ_EV_LTD][Bus.pt])
+  assert ctrl.update(cs, cc, packer, 1000, 0, None)
+  cc.intelligentCruiseButtonManagement.sendButton = SendButtonState.none
+  for frame in range(1001, 1020):
+    assert not ctrl.update(cs, cc, packer, frame, ctrl.last_button_frame, None)
+  assert ctrl._ioniq_press_frame is None
+
+
+def test_direction_change_leaves_a_release_gap():
+  ctrl = interface()
+  cs = car_state()
+  cc = SimpleNamespace(intelligentCruiseButtonManagement=SimpleNamespace(sendButton=SendButtonState.increase))
+  packer = CANPacker(DBC[CAR.HYUNDAI_IONIQ_EV_LTD][Bus.pt])
+  assert ctrl.update(cs, cc, packer, 1000, 0, None)
+  cc.intelligentCruiseButtonManagement.sendButton = SendButtonState.decrease
+  for frame in range(1001, 1008):
+    assert not ctrl.update(cs, cc, packer, frame, ctrl.last_button_frame, None)
+  assert ctrl.update(cs, cc, packer, 1008, ctrl.last_button_frame, None)
+
+
+def test_opposite_speed_change_pauses_the_pending_press():
+  ctrl = interface()
+  cs = car_state()
+  cc = SimpleNamespace(intelligentCruiseButtonManagement=SimpleNamespace(sendButton=SendButtonState.increase))
+  packer = CANPacker(DBC[CAR.HYUNDAI_IONIQ_EV_LTD][Bus.pt])
+  assert ctrl.update(cs, cc, packer, 1000, 0, None)
+  cs.out.cruiseState.speedCluster -= 1 / 3.6
+  for frame in range(1001, 1009):
+    assert not ctrl.update(cs, cc, packer, frame, ctrl.last_button_frame, None)
