@@ -9,7 +9,7 @@ import numpy as np
 from opendbc.car import DT_CTRL, structs
 from opendbc.car.can_definitions import CanData
 from opendbc.car.hyundai import hyundaican, hyundaicanfd
-from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CANFD_CAR
+from opendbc.car.hyundai.values import HyundaiFlags, Buttons, CANFD_CAR, CAR
 from opendbc.sunnypilot.car.intelligent_cruise_button_management_interface_base import IntelligentCruiseButtonManagementInterfaceBase
 
 ButtonType = structs.CarState.ButtonEvent.Type
@@ -19,6 +19,8 @@ BUTTON_COPIES = 2
 BUTTON_COPIES_TIME = 7
 BUTTON_COPIES_TIME_IMPERIAL = [BUTTON_COPIES_TIME + 3, 70]
 BUTTON_COPIES_TIME_METRIC = [BUTTON_COPIES_TIME, 40]
+BUTTON_TIMING = (0.1, 0.15)  # seconds: release gap and complete cycle
+IONIQ_BUTTON_TIMING = (0.07, 0.12)
 
 BUTTONS = {
   SendButtonState.increase: Buttons.RES_ACCEL,
@@ -35,11 +37,12 @@ class IntelligentCruiseButtonManagementInterface(IntelligentCruiseButtonManageme
     copies_xp = BUTTON_COPIES_TIME_METRIC if CS.is_metric else BUTTON_COPIES_TIME_IMPERIAL
     copies = int(np.interp(BUTTON_COPIES_TIME, copies_xp, [1, BUTTON_COPIES]))
 
-    # send resume at a max freq of 10Hz
-    if (self.frame - self.last_button_frame) * DT_CTRL > 0.1:
-      # send 25 messages at a time to increases the likelihood of resume being accepted
+    button_wait, button_interval = (
+      IONIQ_BUTTON_TIMING if self.CP.carFingerprint == CAR.HYUNDAI_IONIQ_EV_LTD else BUTTON_TIMING
+    )
+    if (self.frame - self.last_button_frame) * DT_CTRL > button_wait:
       can_sends.extend([hyundaican.create_clu11(packer, self.frame, CS.clu11, send_button, self.CP)] * copies)
-      if (self.frame - self.last_button_frame) * DT_CTRL >= 0.15:
+      if (self.frame - self.last_button_frame) * DT_CTRL >= button_interval:
         self.last_button_frame = self.frame
 
     return can_sends
