@@ -124,6 +124,9 @@ class SpeedLimitAssist:
     return bool(self.v_cruise_cluster_conv < CONFIRM_SPEED_THRESHOLD[self.is_metric])
 
   def update_active_event(self, events_sp: EventsSP) -> None:
+    if not self.pcm_op_long and self.target_set_speed_confirmed:
+      return
+
     if self.v_cruise_cluster_below_confirm_speed_threshold:
       events_sp.add(EventNameSP.speedLimitChanged)
     else:
@@ -411,13 +414,8 @@ class SpeedLimitAssist:
       if self._state_prev not in ACTIVE_STATES:
         self.update_active_event(events_sp)
 
-      # only notify if we acquire a valid speed limit
-      # do not check has_speed_limit here
-      elif self._speed_limit != self.speed_limit_prev:
-        if self.speed_limit_prev <= 0:
-          self.update_active_event(events_sp)
-        elif self.speed_limit_prev > 0 and self._speed_limit > 0:
-          self.update_active_event(events_sp)
+      elif self.speed_limit_final_last_conv != self.prev_speed_limit_final_last_conv:
+        self.update_active_event(events_sp)
 
   def update(self, long_enabled: bool, long_override: bool, v_ego: float, a_ego: float, v_cruise_cluster: float, speed_limit: float,
              speed_limit_final_last: float, has_speed_limit: bool, distance: float, events_sp: EventsSP) -> None:

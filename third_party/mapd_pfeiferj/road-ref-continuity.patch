@@ -1,0 +1,963 @@
+--- a/way.go
++++ b/way.go
+@@ -626,15 +626,16 @@
+ 		curvatureThreshold = 0.1
+ 	}
+ 
+-	name, _ := way.Name()
+-	if len(name) > 0 {
++	// A numbered road can change street names at a junction.
++	ref, _ := way.Ref()
++	if len(ref) > 0 {
+ 		candidates := []Way{}
+ 		for _, mWay := range matchingWays {
+-			mName, err := mWay.Name()
++			mRef, err := mWay.Ref()
+ 			if err != nil {
+ 				continue
+ 			}
+-			if mName == name {
++			if mRef == ref {
+ 				isForward := NextIsForward(mWay, matchNode)
+ 				if !isForward && mWay.OneWay() {
+ 					continue
+@@ -659,15 +660,22 @@
+ 		}
+ 	}
+ 
+-	ref, _ := way.Ref()
+ 	if len(ref) > 0 {
++		refs := strings.Split(ref, ";")
+ 		candidates := []Way{}
+ 		for _, mWay := range matchingWays {
+ 			mRef, err := mWay.Ref()
+ 			if err != nil {
+ 				continue
+ 			}
+-			if mRef == ref {
++			mRefs := strings.Split(mRef, ";")
++			hasMatch := false
++			for _, r := range refs {
++				for _, mr := range mRefs {
++					hasMatch = hasMatch || (strings.TrimSpace(r) == strings.TrimSpace(mr))
++				}
++			}
++			if hasMatch {
+ 				isForward := NextIsForward(mWay, matchNode)
+ 				if !isForward && mWay.OneWay() {
+ 					continue
+@@ -692,22 +700,15 @@
+ 		}
+ 	}
+ 
+-	if len(ref) > 0 {
+-		refs := strings.Split(ref, ";")
++	name, _ := way.Name()
++	if len(name) > 0 {
+ 		candidates := []Way{}
+ 		for _, mWay := range matchingWays {
+-			mRef, err := mWay.Ref()
++			mName, err := mWay.Name()
+ 			if err != nil {
+ 				continue
+ 			}
+-			mRefs := strings.Split(mRef, ";")
+-			hasMatch := false
+-			for _, r := range refs {
+-				for _, mr := range mRefs {
+-					hasMatch = hasMatch || (strings.TrimSpace(r) == strings.TrimSpace(mr))
+-				}
+-			}
+-			if hasMatch {
++			if mName == name {
+ 				isForward := NextIsForward(mWay, matchNode)
+ 				if !isForward && mWay.OneWay() {
+ 					continue
+--- /dev/null
++++ b/way_test.go
+@@ -0,0 +1,294 @@
++package main
++
++import (
++	"encoding/json"
++	"math"
++	"os"
++	"testing"
++
++	"capnproto.org/go/capnp/v3"
++)
++
++type fixtureWay struct {
++	Index  int          `json:"index"`
++	Name   string       `json:"name"`
++	Ref    string       `json:"ref"`
++	Lanes  uint8        `json:"lanes"`
++	OneWay bool         `json:"oneway"`
++	Speed  float64      `json:"speed"`
++	Nodes  [][2]float64 `json:"nodes"`
++}
++
++func fixtureOffline(t *testing.T, fixtures []fixtureWay) (Offline, map[int]Way) {
++	t.Helper()
++	_, segment, err := capnp.NewMessage(capnp.SingleSegment(nil))
++	if err != nil {
++		t.Fatal(err)
++	}
++	offline, err := NewRootOffline(segment)
++	if err != nil {
++		t.Fatal(err)
++	}
++	offline.SetMinLat(46.0)
++	offline.SetMaxLat(48.0)
++	offline.SetMinLon(18.0)
++	offline.SetMaxLon(20.0)
++	ways, err := offline.NewWays(int32(len(fixtures)))
++	if err != nil {
++		t.Fatal(err)
++	}
++	byIndex := map[int]Way{}
++	for i, fixture := range fixtures {
++		way := ways.At(i)
++		if err := way.SetName(fixture.Name); err != nil {
++			t.Fatal(err)
++		}
++		if err := way.SetRef(fixture.Ref); err != nil {
++			t.Fatal(err)
++		}
++		way.SetLanes(fixture.Lanes)
++		way.SetOneWay(fixture.OneWay)
++		way.SetMaxSpeed(fixture.Speed / 3.6)
++		nodes, err := way.NewNodes(int32(len(fixture.Nodes)))
++		if err != nil {
++			t.Fatal(err)
++		}
++		minLat, minLon, maxLat, maxLon := 90.0, 180.0, -90.0, -180.0
++		for n, point := range fixture.Nodes {
++			node := nodes.At(n)
++			node.SetLatitude(point[0])
++			node.SetLongitude(point[1])
++			minLat, maxLat = math.Min(minLat, point[0]), math.Max(maxLat, point[0])
++			minLon, maxLon = math.Min(minLon, point[1]), math.Max(maxLon, point[1])
++		}
++		way.SetMinLat(minLat)
++		way.SetMaxLat(maxLat)
++		way.SetMinLon(minLon)
++		way.SetMaxLon(maxLon)
++		byIndex[fixture.Index] = way
++	}
++	return offline, byIndex
++}
++
++func domsodFixture(t *testing.T) (Offline, map[int]Way) {
++	t.Helper()
++	data, err := os.ReadFile("testdata/domsod.json")
++	if err != nil {
++		t.Fatal(err)
++	}
++	var fixtures []fixtureWay
++	if err := json.Unmarshal(data, &fixtures); err != nil {
++		t.Fatal(err)
++	}
++	return fixtureOffline(t, fixtures)
++}
++
++func TestDomsodNumberedRoadContinuesAcrossStreetNameChange(t *testing.T) {
++	offline, ways := domsodFixture(t)
++	for _, reverseOrder := range []bool{false, true} {
++		t.Run(map[bool]string{false: "original order", true: "reversed order"}[reverseOrder], func(t *testing.T) {
++			if reverseOrder {
++				data, err := os.ReadFile("testdata/domsod.json")
++				if err != nil {
++					t.Fatal(err)
++				}
++				var fixtures []fixtureWay
++				if err := json.Unmarshal(data, &fixtures); err != nil {
++					t.Fatal(err)
++				}
++				for i, j := 0, len(fixtures)-1; i < j; i, j = i+1, j-1 {
++					fixtures[i], fixtures[j] = fixtures[j], fixtures[i]
++				}
++				offline, ways = fixtureOffline(t, fixtures)
++			}
++			result, err := NextWay(ways[700], offline, false)
++			if err != nil {
++				t.Fatal(err)
++			}
++			name, _ := result.Way.Name()
++			ref, _ := result.Way.Ref()
++			if name != "Kossuth Lajos utca" || ref != "51" || result.IsForward {
++				t.Fatalf("northbound continuation: name=%q ref=%q forward=%v", name, ref, result.IsForward)
++			}
++			back, err := NextWay(ways[769], offline, true)
++			if err != nil {
++				t.Fatal(err)
++			}
++			name, _ = back.Way.Name()
++			ref, _ = back.Way.Ref()
++			if name != "Tassi út" || ref != "51" || !back.IsForward {
++				t.Fatalf("southbound continuation: name=%q ref=%q forward=%v", name, ref, back.IsForward)
++			}
++		})
++	}
++}
++
++func targetsForFixturePath(t *testing.T, ways map[int]Way, indices []int, isForward bool) []Velocity {
++	t.Helper()
++	state := State{CurrentWay: CurrentWay{Way: ways[indices[0]], OnWay: OnWayResult{IsForward: isForward}}}
++	for _, index := range indices[1:] {
++		state.NextWays = append(state.NextWays, NextWayResult{Way: ways[index], IsForward: isForward})
++	}
++	curvatures, err := GetStateCurvatures(&state)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return GetTargetVelocities(curvatures)
++}
++
++func hasTarget(targets []Velocity, expectedKph float64) bool {
++	for _, target := range targets {
++		if math.Abs(target.Velocity*3.6-expectedKph) < 0.00001 {
++			return true
++		}
++	}
++	return false
++}
++
++func TestDomsodMainRoadAvoidsSideBranchCurveTargets(t *testing.T) {
++	_, ways := domsodFixture(t)
++	state := State{CurrentWay: CurrentWay{Way: ways[700], OnWay: OnWayResult{IsForward: false}},
++		NextWays: []NextWayResult{{Way: ways[5], IsForward: true}}}
++	curves, err := GetStateCurvatures(&state)
++	if err != nil {
++		t.Fatal(err)
++	}
++	oldTargets := GetTargetVelocities(curves)
++	if !hasTarget(oldTargets, 33.75393791198731) || !hasTarget(oldTargets, 24.094011497497558) {
++		t.Fatal("side branch did not reproduce both recorded false targets")
++	}
++	targets := targetsForFixturePath(t, ways, []int{700, 769, 851, 850, 930}, false)
++	if len(targets) == 0 {
++		t.Fatal("no curve targets on the main-road path")
++	}
++	for _, target := range targets {
++		if target.Velocity*3.6 <= 55 {
++			t.Fatalf("unexpected low target on road 51: %.6f km/h", target.Velocity*3.6)
++		}
++	}
++}
++
++func TestDomsodRealMainRoadBendKeepsItsCurveTarget(t *testing.T) {
++	_, ways := domsodFixture(t)
++	targets := targetsForFixturePath(t, ways, []int{848, 847, 213, 695}, false)
++	if !hasTarget(targets, 30.884868621826172) {
++		t.Fatal("the separate real bend no longer reproduces its recorded target")
++	}
++}
++
++func TestNextWayRefPriorityAndFallbacks(t *testing.T) {
++	junction := [2]float64{47.001, 19.0}
++	for _, tc := range []struct {
++		name, currentRef, otherRef    string
++		reverseOneWay, sharp, wantRef bool
++	}{
++		{name: "exact ref beats street name", currentRef: "51", otherRef: "51", wantRef: true},
++		{name: "shared ref beats street name", currentRef: "51; 52", otherRef: "52", wantRef: true},
++		{name: "missing ref falls back to name"},
++		{name: "unmatched ref falls back to name", currentRef: "51", otherRef: "52"},
++		{name: "reverse oneway is rejected", currentRef: "51", otherRef: "51", reverseOneWay: true},
++		{name: "invalid connection falls back to name", currentRef: "51", otherRef: "51", sharp: true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			current := fixtureWay{Index: 0, Name: "Old street", Ref: tc.currentRef, Lanes: 2,
++				Nodes: [][2]float64{{47.0, 19.0}, {47.000995, 19.0}, junction}}
++			sameName := fixtureWay{Index: 1, Name: "Old street", Lanes: 2,
++				Nodes: [][2]float64{junction, {47.0018, 18.9997}}}
++			other := fixtureWay{Index: 2, Name: "New street", Ref: tc.otherRef, Lanes: 2,
++				Nodes: [][2]float64{junction, {47.0018, 19.0002}}}
++			if tc.reverseOneWay {
++				other.OneWay = true
++				other.Nodes[0], other.Nodes[1] = other.Nodes[1], other.Nodes[0]
++			}
++			if tc.sharp {
++				other.Nodes[1] = [2]float64{47.001, 19.000008}
++			}
++			offline, ways := fixtureOffline(t, []fixtureWay{current, sameName, other})
++			result, err := NextWay(ways[0], offline, true)
++			if err != nil {
++				t.Fatal(err)
++			}
++			name, _ := result.Way.Name()
++			want := "Old street"
++			if tc.wantRef {
++				want = "New street"
++			}
++			if name != want {
++				t.Fatalf("next street=%q, want %q", name, want)
++			}
++		})
++	}
++}
++
++func TestDownloadedDomsodMap(t *testing.T) {
++	path := os.Getenv("MAPD_REPLAY_TILE")
++	if path == "" {
++		t.Skip("set MAPD_REPLAY_TILE to the recorded offline map tile")
++	}
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	message, err := capnp.UnmarshalPacked(data)
++	if err != nil {
++		t.Fatal(err)
++	}
++	offline, err := ReadRootOffline(message)
++	if err != nil {
++		t.Fatal(err)
++	}
++	ways, err := offline.Ways()
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, tc := range []struct {
++		name                string
++		index               int
++		position            Position
++		firstName, firstRef string
++		wantLowTarget       bool
++	}{
++		{name: "Tassi on road 51", index: 700,
++			position:  Position{Latitude: 47.0842474, Longitude: 19.0049373, Bearing: 348.5088},
++			firstName: "Kossuth Lajos utca", firstRef: "51"},
++		{name: "Dozsa on road 52305", index: 848,
++			position:  Position{Latitude: 47.0900961, Longitude: 19.01545, Bearing: 123.7624},
++			firstName: "Dózsa György út", firstRef: "52305", wantLowTarget: true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			current := CurrentWay{Way: ways.At(tc.index), OnWay: OnWayResult{IsForward: false}}
++			next, err := NextWays(tc.position, current, offline, false)
++			if err != nil || len(next) == 0 {
++				t.Fatalf("no next ways: %v", err)
++			}
++			name, _ := next[0].Way.Name()
++			ref, _ := next[0].Way.Ref()
++			if name != tc.firstName || ref != tc.firstRef {
++				t.Fatalf("next way %q ref=%q", name, ref)
++			}
++			state := State{CurrentWay: current, NextWays: next, Position: tc.position}
++			curves, err := GetStateCurvatures(&state)
++			if err != nil {
++				t.Fatal(err)
++			}
++			targets := GetTargetVelocities(curves)
++			minKph := math.Inf(1)
++			for _, target := range targets {
++				if target.Velocity > 0 {
++					minKph = math.Min(minKph, target.Velocity*3.6)
++				}
++			}
++			if len(targets) == 0 || math.IsInf(minKph, 1) {
++				t.Fatal("no valid targets")
++			}
++			if tc.wantLowTarget {
++				if !hasTarget(targets, 30.884868621826172) {
++					t.Fatal("real main-road bend target changed")
++				}
++			} else if math.Round(minKph) < 55 {
++				t.Fatalf("false low main-road target at a 55 km/h setpoint: %.6f", minKph)
++			}
++			t.Logf("next=%s ref=%s minimum curve target=%.6f km/h", name, ref, minKph)
++		})
++	}
++}
+--- /dev/null
++++ b/testdata/domsod.json
+@@ -0,0 +1,588 @@
++[
++  {
++    "index": 5,
++    "name": "Tassi út",
++    "ref": "",
++    "speed": 50.000040000000006,
++    "speed_forward": 0.0,
++    "speed_backward": 0.0,
++    "lanes": 0,
++    "oneway": false,
++    "advisory": 0.0,
++    "nodes": [
++      [
++        47.084536500000006,
++        19.0048345
++      ],
++      [
++        47.0845673,
++        19.0047395
++      ],
++      [
++        47.0845884,
++        19.0046746
++      ],
++      [
++        47.084654300000004,
++        19.0045718
++      ],
++      [
++        47.085446600000004,
++        19.0040707
++      ],
++      [
++        47.0855611,
++        19.0039497
++      ]
++    ]
++  },
++  {
++    "index": 213,
++    "name": "Dózsa György út",
++    "ref": "52305",
++    "speed": 0.0,
++    "speed_forward": 0.0,
++    "speed_backward": 0.0,
++    "lanes": 2,
++    "oneway": false,
++    "advisory": 0.0,
++    "nodes": [
++      [
++        47.089753,
++        19.0163894
++      ],
++      [
++        47.0897598,
++        19.0162745
++      ],
++      [
++        47.0897791,
++        19.016164
++      ],
++      [
++        47.0898501,
++        19.015978200000003
++      ],
++      [
++        47.090010500000005,
++        19.0156262
++      ]
++    ]
++  },
++  {
++    "index": 695,
++    "name": "Vasút utca",
++    "ref": "52305",
++    "speed": 0.0,
++    "speed_forward": 0.0,
++    "speed_backward": 0.0,
++    "lanes": 0,
++    "oneway": false,
++    "advisory": 0.0,
++    "nodes": [
++      [
++        47.088966400000004,
++        19.0373994
++      ],
++      [
++        47.0888891,
++        19.0371245
++      ],
++      [
++        47.0888263,
++        19.0368453
++      ],
++      [
++        47.088720200000004,
++        19.036272200000003
++      ],
++      [
++        47.088625500000006,
++        19.0357688
++      ],
++      [
++        47.0885844,
++        19.035515
++      ],
++      [
++        47.088572000000006,
++        19.0352521
++      ],
++      [
++        47.0885868,
++        19.0350147
++      ],
++      [
++        47.0886167,
++        19.0347385
++      ],
++      [
++        47.0886562,
++        19.034506800000003
++      ],
++      [
++        47.0887143,
++        19.0342442
++      ],
++      [
++        47.0890416,
++        19.032796700000002
++      ],
++      [
++        47.0892022,
++        19.0320742
++      ],
++      [
++        47.0892836,
++        19.031710800000003
++      ],
++      [
++        47.0893725,
++        19.0313519
++      ],
++      [
++        47.0901469,
++        19.0285254
++      ],
++      [
++        47.090418400000004,
++        19.0275249
++      ],
++      [
++        47.0906802,
++        19.0265123
++      ],
++      [
++        47.090953600000006,
++        19.0255091
++      ],
++      [
++        47.0912628,
++        19.0245314
++      ],
++      [
++        47.0915016,
++        19.023790100000003
++      ],
++      [
++        47.091762300000006,
++        19.0229727
++      ],
++      [
++        47.0919899,
++        19.0222731
++      ],
++      [
++        47.0920562,
++        19.022036800000002
++      ],
++      [
++        47.092101400000004,
++        19.0217926
++      ],
++      [
++        47.0921153,
++        19.021601800000003
++      ],
++      [
++        47.0921159,
++        19.021344300000003
++      ],
++      [
++        47.0921043,
++        19.021088900000002
++      ],
++      [
++        47.0920828,
++        19.0209197
++      ],
++      [
++        47.0920463,
++        19.020755
++      ],
++      [
++        47.0919961,
++        19.0205972
++      ],
++      [
++        47.0919321,
++        19.020447400000002
++      ],
++      [
++        47.0918702,
++        19.020317300000002
++      ],
++      [
++        47.0917965,
++        19.0201873
++      ],
++      [
++        47.091643100000006,
++        19.0199338
++      ],
++      [
++        47.091496400000004,
++        19.019678600000002
++      ],
++      [
++        47.0913697,
++        19.0194121
++      ],
++      [
++        47.091283700000005,
++        19.019149300000002
++      ],
++      [
++        47.091194800000004,
++        19.0189273
++      ],
++      [
++        47.0905234,
++        19.017832300000002
++      ],
++      [
++        47.0898727,
++        19.0167162
++      ],
++      [
++        47.0897919,
++        19.0165647
++      ],
++      [
++        47.089767800000004,
++        19.0164785
++      ],
++      [
++        47.089753,
++        19.0163894
++      ]
++    ]
++  },
++  {
++    "index": 700,
++    "name": "Tassi út",
++    "ref": "51",
++    "speed": 50.000040000000006,
++    "speed_forward": 0.0,
++    "speed_backward": 0.0,
++    "lanes": 2,
++    "oneway": false,
++    "advisory": 0.0,
++    "nodes": [
++      [
++        47.084536500000006,
++        19.0048345
++      ],
++      [
++        47.0843542,
++        19.0048597
++      ],
++      [
++        47.084217200000005,
++        19.0048843
++      ],
++      [
++        47.084035300000004,
++        19.0049457
++      ],
++      [
++        47.0838947,
++        19.0050075
++      ],
++      [
++        47.0836405,
++        19.0051589
++      ],
++      [
++        47.083426800000005,
++        19.0052819
++      ],
++      [
++        47.0827642,
++        19.0056933
++      ],
++      [
++        47.082440500000004,
++        19.005884100000003
++      ],
++      [
++        47.0817051,
++        19.0063463
++      ],
++      [
++        47.0814749,
++        19.0064876
++      ],
++      [
++        47.0811725,
++        19.0066756
++      ],
++      [
++        47.081054300000005,
++        19.006747700000002
++      ],
++      [
++        47.0807974,
++        19.006903400000002
++      ],
++      [
++        47.080519900000006,
++        19.007036300000003
++      ],
++      [
++        47.080281500000005,
++        19.007125300000002
++      ],
++      [
++        47.079966500000005,
++        19.007243300000003
++      ],
++      [
++        47.078847100000004,
++        19.007650700000003
++      ],
++      [
++        47.0774364,
++        19.0081548
++      ]
++    ]
++  },
++  {
++    "index": 769,
++    "name": "Kossuth Lajos utca",
++    "ref": "51",
++    "speed": 50.000040000000006,
++    "speed_forward": 0.0,
++    "speed_backward": 0.0,
++    "lanes": 2,
++    "oneway": false,
++    "advisory": 0.0,
++    "nodes": [
++      [
++        47.0860393,
++        19.005008200000002
++      ],
++      [
++        47.0857557,
++        19.0049792
++      ],
++      [
++        47.0854626,
++        19.0049268
++      ],
++      [
++        47.0852585,
++        19.0048925
++      ],
++      [
++        47.085122000000005,
++        19.0048605
++      ],
++      [
++        47.0849844,
++        19.004842
++      ],
++      [
++        47.0848358,
++        19.0048284
++      ],
++      [
++        47.084671900000004,
++        19.0048187
++      ],
++      [
++        47.084536500000006,
++        19.0048345
++      ]
++    ]
++  },
++  {
++    "index": 847,
++    "name": "Dózsa György út",
++    "ref": "52305",
++    "speed": 0.0,
++    "speed_forward": 0.0,
++    "speed_backward": 0.0,
++    "lanes": 2,
++    "oneway": false,
++    "advisory": 0.0,
++    "nodes": [
++      [
++        47.090010500000005,
++        19.0156262
++      ],
++      [
++        47.0900599,
++        19.0155125
++      ],
++      [
++        47.090192200000004,
++        19.015212700000003
++      ]
++    ]
++  },
++  {
++    "index": 848,
++    "name": "Dózsa György út",
++    "ref": "52305",
++    "speed": 0.0,
++    "speed_forward": 0.0,
++    "speed_backward": 0.0,
++    "lanes": 0,
++    "oneway": false,
++    "advisory": 0.0,
++    "nodes": [
++      [
++        47.090192200000004,
++        19.015212700000003
++      ],
++      [
++        47.091016200000006,
++        19.0132397
++      ],
++      [
++        47.0911999,
++        19.0128583
++      ],
++      [
++        47.091413100000004,
++        19.0124684
++      ],
++      [
++        47.0918184,
++        19.0117075
++      ],
++      [
++        47.092087500000005,
++        19.0111221
++      ],
++      [
++        47.0923798,
++        19.0104419
++      ],
++      [
++        47.0925256,
++        19.0101029
++      ],
++      [
++        47.092586600000004,
++        19.0099741
++      ],
++      [
++        47.0926819,
++        19.009772700000003
++      ],
++      [
++        47.092825600000005,
++        19.0094719
++      ],
++      [
++        47.092952000000004,
++        19.0091576
++      ],
++      [
++        47.0932047,
++        19.0085261
++      ],
++      [
++        47.0933329,
++        19.0082281
++      ],
++      [
++        47.093406900000005,
++        19.008068
++      ],
++      [
++        47.0934794,
++        19.0079423
++      ],
++      [
++        47.0935253,
++        19.007877
++      ],
++      [
++        47.093572,
++        19.0078149
++      ]
++    ]
++  },
++  {
++    "index": 850,
++    "name": "Kossuth Lajos utca",
++    "ref": "51",
++    "speed": 50.000040000000006,
++    "speed_forward": 0.0,
++    "speed_backward": 0.0,
++    "lanes": 2,
++    "oneway": false,
++    "advisory": 0.0,
++    "nodes": [
++      [
++        47.086704600000004,
++        19.004931900000003
++      ],
++      [
++        47.0864211,
++        19.0049941
++      ]
++    ]
++  },
++  {
++    "index": 851,
++    "name": "Kossuth Lajos utca",
++    "ref": "51",
++    "speed": 50.000040000000006,
++    "speed_forward": 0.0,
++    "speed_backward": 0.0,
++    "lanes": 2,
++    "oneway": false,
++    "advisory": 0.0,
++    "nodes": [
++      [
++        47.0864211,
++        19.0049941
++      ],
++      [
++        47.0861767,
++        19.0050151
++      ],
++      [
++        47.0860393,
++        19.005008200000002
++      ]
++    ]
++  },
++  {
++    "index": 930,
++    "name": "Kossuth Lajos utca",
++    "ref": "51",
++    "speed": 50.000040000000006,
++    "speed_forward": 0.0,
++    "speed_backward": 0.0,
++    "lanes": 2,
++    "oneway": false,
++    "advisory": 0.0,
++    "nodes": [
++      [
++        47.089026100000005,
++        19.004077300000002
++      ],
++      [
++        47.088743400000006,
++        19.0041729
++      ],
++      [
++        47.087226900000005,
++        19.004760400000002
++      ],
++      [
++        47.0870034,
++        19.0048444
++      ],
++      [
++        47.086704600000004,
++        19.004931900000003
++      ]
++    ]
++  }
++]

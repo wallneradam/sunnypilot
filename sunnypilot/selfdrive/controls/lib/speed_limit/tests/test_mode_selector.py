@@ -42,7 +42,7 @@ def test_short_press_does_not_switch():
 def test_hold_cycles_once_until_release():
   params = MemoryParams(Mode.off)
   selector = SpeedLimitModeSelector(params)
-  for expected, label in ((Mode.assist, 'CONFIRM'), (Mode.auto, 'AUTO'), (Mode.assist, 'CONFIRM')):
+  for expected, label in ((Mode.auto, 'AUTO'), (Mode.assist, 'CONFIRM'), (Mode.auto, 'AUTO')):
     alerts = []
     for n in range(400):
       alert = selector.update(state(True if n == 0 else None))

@@ -57,7 +57,7 @@ class SpeedLimitModeSelector:
     if self.button == car.CarState.ButtonEvent.Type.decelCruise:
       new = Mode.off
     else:
-      new = Mode.auto if old == Mode.assist else Mode.assist
+      new = Mode.assist if old == Mode.auto else Mode.auto
     self.params.put('SpeedLimitMode', int(new), block=False)
     cloudlog.event('speed_limit_mode_changed', previous=int(old), mode=self.LABELS[new], held_seconds=round(self.frames * DT_CTRL, 2))
     alert = Alert(f'Speed limits: {self.LABELS[new]}', '', AlertStatus.normal, AlertSize.small,

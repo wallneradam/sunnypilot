@@ -51,6 +51,12 @@ AlertLevel = log.DriverMonitoringState.AlertLevel
 MonitoringPolicy = log.DriverMonitoringState.MonitoringPolicy
 TurnDirection = custom.ModelDataV2SP.TurnDirection
 
+SPEED_LIMIT_ALERT_TYPES = frozenset(f'{name}/{ET.WARNING}' for name in (
+  'speedLimitActive', 'speedLimitChanged', 'speedLimitPreActive', 'speedLimitPending',
+))
+SPEED_ADJUST_BUTTONS = (ButtonType.accelCruise, ButtonType.decelCruise, ButtonType.resumeCruise, ButtonType.setCruise)
+SPEED_LIMIT_ALERT_MANUAL_HOLD = int(1. / DT_CTRL)
+
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 
 
@@ -178,6 +184,7 @@ class SelfdriveD(CruiseHelper):
     self.button_state_tracker = ButtonStateTracker()
     self.speed_limit_mode_selector = SpeedLimitModeSelector(self.params) if self.CP.brand == 'hyundai' and not self.CP_SP.pcmCruiseSpeed else None
     self.speed_limit_mode_alert = None
+    self.speed_limit_alert_suppress_until = 0
     self.car_events_sp = CarSpecificEventsSP(self.CP, self.CP_SP)
 
     CruiseHelper.__init__(self, self.CP)
@@ -552,8 +559,14 @@ class SelfdriveD(CruiseHelper):
       alerts_sp.append(self.speed_limit_mode_alert)
       self.speed_limit_mode_alert = None
 
+    speed_button_held = any(self.button_state_tracker.pressed & (1 << button) for button in SPEED_ADJUST_BUTTONS)
+    if speed_button_held or any(be.type in SPEED_ADJUST_BUTTONS for be in CS.buttonEvents):
+      self.speed_limit_alert_suppress_until = self.sm.frame + SPEED_LIMIT_ALERT_MANUAL_HOLD
+    clear_alert_types = SPEED_LIMIT_ALERT_TYPES if self.sm.frame < self.speed_limit_alert_suppress_until else frozenset()
+    alerts_sp = [alert for alert in alerts_sp if alert.alert_type not in clear_alert_types]
+
     self.AM.add_many(self.sm.frame, alerts + alerts_sp)
-    self.AM.process_alerts(self.sm.frame, clear_event_types)
+    self.AM.process_alerts(self.sm.frame, clear_event_types, clear_alert_types)
 
   def publish_selfdriveState(self, CS):
     # selfdriveState

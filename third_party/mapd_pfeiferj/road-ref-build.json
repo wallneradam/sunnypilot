@@ -1,0 +1,15 @@
+{
+  "upstream": "https://github.com/pfeiferj/mapd",
+  "commit": "46cd71ade6f630f1564c83bf1763f9d949a9ff30",
+  "base_version": "v1.12.0",
+  "toolchain": "go1.27.2",
+  "target": "linux/arm64",
+  "cgo": false,
+  "build_flags": [
+    "-trimpath",
+    "-ldflags=-extldflags=-static -s -w"
+  ],
+  "original_sha256": "fdb3b49ee19956e6ce09fdc3373cbba557f1263b2180e9f344c1d4053852284b",
+  "patched_sha256": "d3374830595df3f7efeeb1f9ef9193cd87f285a064d4ec0faffeda03e35f4cb1",
+  "patch_sha256": "909350a08427ab4ff1da0ad1146d38c53cdba4deb47430c49bc9b1074c30b62b"
+}
